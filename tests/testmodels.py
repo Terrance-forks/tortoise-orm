@@ -543,6 +543,19 @@ class Employee(Model):
         max_recursion = 2
 
 
+class SupervisedEmployee(Model):
+    manager: fields.ForeignKeyNullableRelation["SupervisedEmployee"] = fields.ForeignKeyField(
+        "models.SupervisedEmployee",
+        related_name="team_members",
+        null=True,
+    )
+    supervisor: fields.ForeignKeyNullableRelation["SupervisedEmployee"] = fields.ForeignKeyField(
+        "models.SupervisedEmployee",
+        related_name="supervisees",
+        null=True,
+    )
+
+
 class StraightFields(Model):
     eyedee = fields.IntField(pk=True, description="Da PK")
     chars = fields.CharField(max_length=50, index=True, description="Some chars")

@@ -1,4 +1,13 @@
-from tests.testmodels import Event, IntFields, MinRelation, Node, Reporter, Tournament, Tree
+from tests.testmodels import (
+    Event,
+    IntFields,
+    MinRelation,
+    Node,
+    Reporter,
+    SupervisedEmployee,
+    Tournament,
+    Tree,
+)
 from tortoise import Tortoise
 from tortoise.contrib import test
 from tortoise.exceptions import (
@@ -9,6 +18,7 @@ from tortoise.exceptions import (
     ParamsError,
 )
 from tortoise.expressions import F, RawSQL, Subquery
+from tortoise.fields.relational import NoneAwaitable
 
 # TODO: Test the many exceptions in QuerySet
 # TODO: .filter(intnum_null=None) does not work as expected
@@ -414,6 +424,51 @@ class TestQueryset(test.TestCase):
         self.assertEqual(tree.parent.name, parent_node.name)
         self.assertEqual(tree.child.pk, child_node.pk)
         self.assertEqual(tree.child.name, child_node.name)
+
+    def _validate_fetched_employee(
+        self,
+        fetched: SupervisedEmployee,
+        original: SupervisedEmployee,
+        depth: int,
+    ):
+        for attr in ("manager", "supervisor"):
+            fetched_relation = getattr(fetched, attr)
+            original_relation = getattr(original, attr)
+            if original_relation is None:
+                if depth:
+                    self.assertIsNone(fetched_relation)
+                else:
+                    self.assertIs(fetched_relation, NoneAwaitable)
+            else:
+                self.assertIsInstance(fetched_relation, SupervisedEmployee)
+                self._validate_fetched_employee(fetched_relation, original_relation, depth - 1)
+
+    async def test_select_related_with_nested_models(self):
+        top = await SupervisedEmployee.create(manager=None, supervisor=None)
+        originals = [
+            top,
+            await SupervisedEmployee.create(manager=top, supervisor=None),
+            await SupervisedEmployee.create(manager=None, supervisor=top),
+            await SupervisedEmployee.create(manager=top, supervisor=top),
+        ]
+        for parent in originals[1:]:
+            originals += [
+                await SupervisedEmployee.create(manager=parent, supervisor=None),
+                await SupervisedEmployee.create(manager=None, supervisor=parent),
+                await SupervisedEmployee.create(manager=parent, supervisor=parent),
+            ]
+        originals_map = {employee.id: employee for employee in originals}
+        fetches = await SupervisedEmployee.all().select_related(
+            "manager",
+            "manager__manager",
+            "manager__supervisor",
+            "supervisor",
+            "supervisor__manager",
+            "supervisor__supervisor",
+        )
+        for fetched in fetches:
+            original = originals_map[fetched.id]
+            self._validate_fetched_employee(fetched, original, 2)
 
     @test.requireCapability(dialect="postgres")
     async def test_postgres_search(self):
