@@ -56,7 +56,9 @@ class BaseExecutor:
         db: "BaseDBAsyncClient",
         prefetch_map: "Optional[Dict[str, Set[Union[str, Prefetch]]]]" = None,
         prefetch_queries: Optional[Dict[str, List[Tuple[Optional[str], "QuerySet"]]]] = None,
-        select_related_idx: Optional[List[Tuple["Type[Model]", int, str, "Type[Model]"]]] = None,
+        select_related_idx: Optional[
+            List[Tuple["Type[Model]", int, Sequence[str], Optional[RelationalField]]]
+        ] = None,
     ) -> None:
         self.model = model
         self.db: "BaseDBAsyncClient" = db
@@ -132,23 +134,26 @@ class BaseExecutor:
                 instance: "Model" = self.model._init_from_db(
                     **dict(zip(keys[:current_idx], values[:current_idx]))
                 )
-                instances = [instance]
-                for model, index, model_name, parent_model in self.select_related_idx[1:]:
-                    obj = model._init_from_db(
-                        **dict(
-                            zip(
-                                map(
-                                    lambda x: x.split(".")[1],
-                                    keys[current_idx : current_idx + index],  # noqa
-                                ),
-                                values[current_idx : current_idx + index],  # noqa
-                            )
-                        )
-                    )
-                    for ins in instances:
-                        if isinstance(ins, parent_model):
-                            setattr(ins, f"_{model_name}", obj)
-                    instances.append(obj)
+                for model, index, attr_path, field_object in self.select_related_idx[1:]:
+                    local_keys = keys[current_idx : current_idx + index]  # noqa
+                    local_values = values[current_idx : current_idx + index]  # noqa
+                    path = local_keys[0].split(".", 1)[0]
+                    create = True
+                    if isinstance(field_object, RelationalField):
+                        fk_index = local_keys.index("{}.{}".format(path, field_object.to_field))
+                        create = bool(local_values[fk_index])
+                    obj: Optional[Model] = None
+                    if create:
+                        local_fields = (key.split(".")[1] for key in local_keys)
+                        data = dict(zip(local_fields, local_values))
+                        obj = model._init_from_db(**data)
+                    target: Optional[Model] = instance
+                    for attr in attr_path[:-1]:
+                        target = getattr(target, attr)
+                        if target is None:
+                            break
+                    if target:
+                        setattr(target, f"_{attr_path[-1]}", obj)
                     current_idx += index
             else:
                 instance = self.model._init_from_db(**row)
